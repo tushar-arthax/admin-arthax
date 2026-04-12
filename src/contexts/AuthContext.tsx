@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, ReactNode } from 'react';
 import { AuthUser } from '@/services/api';
 
 interface AuthContextType {
@@ -11,15 +11,19 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-
-  useEffect(() => {
+  
+  const [user, setUser] = useState<AuthUser | null>(() => {
     const storedUser = localStorage.getItem('arthax_admin_user');
     const token = localStorage.getItem('arthax_admin_token');
     if (storedUser && token) {
-      setUser(JSON.parse(storedUser));
+      try {
+        return JSON.parse(storedUser);
+      } catch (e) {
+        return null;
+      }
     }
-  }, []);
+    return null;
+  });
 
   const login = (token: string, userData: AuthUser) => {
     localStorage.setItem('arthax_admin_token', token);
