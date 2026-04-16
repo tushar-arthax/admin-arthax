@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
-import { Building2, LayoutDashboard, LifeBuoy, LogOut, Settings, ShieldAlert } from 'lucide-react';
+import { Building2, LayoutDashboard, LifeBuoy, LogOut, Settings, ShieldAlert, Bell  } from 'lucide-react';
 import { authApi } from '@/services/api';
 import { toast } from 'sonner';
 
@@ -22,6 +22,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     { name: 'Dashboard', path: '/', icon: <LayoutDashboard className="w-5 h-5" /> },
     { name: 'Client Onboarding', path: '/onboarding', icon: <Building2 className="w-5 h-5" /> }, 
     { name: 'Helpdesk', path: '/support', icon: <LifeBuoy className="w-5 h-5" /> },
+    { name: 'Notifications', path: '/notifications', icon: <Bell className="w-5 h-5" /> },
   ];
 
   return (

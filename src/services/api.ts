@@ -14,6 +14,25 @@ export interface LoginResponse {
   user: AuthUser;
 }
 
+
+export type NotificationType = 'system' | 'automatic' | 'admin' | 'information' | 'alert';
+
+export interface AdminNotification {
+  id: string;
+  org_id?: string;
+  title: string;
+  message: string;
+  notification_type: NotificationType;
+  created_at: string;
+}
+
+export interface SendNotificationRequest {
+  title: string;
+  message: string;
+  notification_type: NotificationType;
+  org_id?: string | null;
+}
+
 export type TicketCategory = 'bug' | 'feature_request' | 'billing' | 'how_to' | 'general';
 export type TicketPriority = 'low' | 'medium' | 'high' | 'critical';
 export type TicketStatus = 'open' | 'in_progress' | 'waiting_for_client' | 'resolved' | 'closed' | 'reopened';
@@ -108,6 +127,14 @@ export const apiClient = {
       method: 'PUT', headers: buildHeaders(), body: body ? JSON.stringify(body) : undefined,
     });
     return handleResponse<T>(res);
+  },
+  async patch<T>(path: string, body?: unknown): Promise<T> {
+    const res = await fetch(`${BASE_URL}${path}`, {
+      method: 'PATCH', 
+      headers: buildHeaders(), 
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return handleResponse<T>(res);
   }
 };
 
@@ -133,8 +160,19 @@ export const adminSupportApi = {
 export const adminClientsApi = {
   list: () => apiClient.get<any[]>('/api/admin/clients/onboarded'),
   onboard: (data: any) => apiClient.post<any>('/api/admin/clients/onboard', data),
+   deactivate: (orgId: string) => 
+    apiClient.patch<{ message: string }>(`/api/admin/organizations/${orgId}/deactivate`),
+   activate: (orgId: string) => 
+    apiClient.patch<{ message: string }>(`/api/admin/organizations/${orgId}/activate`),
 };
 
 export const adminAnalyticsApi = {
   getDashboard: () => apiClient.get<AdminDashboardData>('/api/admin/analytics/dashboard'),
+};
+
+export const adminNotificationApi = {
+  send: (data: SendNotificationRequest) => 
+    apiClient.post<{ message: string }>('/api/admin/notifications/send', data),
+  getHistory: (limit: number = 50) => 
+    apiClient.get<AdminNotification[]>(`/api/admin/notifications/history?limit=${limit}`),
 };
