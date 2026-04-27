@@ -5,6 +5,9 @@ import { adminSupportApi, SupportTicket } from '@/services/api';
 import { toast } from 'sonner';
 import { LifeBuoy, Send, Lock, EyeOff, Search, FilterX, Bug, Lightbulb, CreditCard, HelpCircle, MessageSquare } from 'lucide-react';
 
+// IMPORT YOUR CUSTOM SMOOTH UI COMPONENTS HERE
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+
 export default function Helpdesk() {
   const qc = useQueryClient();
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -138,40 +141,47 @@ export default function Helpdesk() {
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
+              
+              {/* BEAUTIFUL CUSTOM DROPDOWNS */}
               <div className="flex gap-2">
-                <select 
-                  className="bg-background border border-border rounded-md text-xs px-2 py-1.5 flex-1 outline-none text-foreground focus:border-primary"
-                  value={categoryFilter}
-                  onChange={(e) => setCategoryFilter(e.target.value)}
-                >
-                  <option value="all">All Types</option>
-                  <option value="bug">Bugs</option>
-                  <option value="feature_request">Feature Req</option>
-                  <option value="billing">Billing</option>
-                  <option value="how_to">How To</option>
-                </select>
-                <select 
-                  className="bg-background border border-border rounded-md text-xs px-2 py-1.5 flex-1 outline-none text-foreground focus:border-primary"
-                  value={timeFilter}
-                  onChange={(e) => setTimeFilter(e.target.value)}
-                >
-                  <option value="all">All Time</option>
-                  <option value="today">Today</option>
-                  <option value="week">Past 7 Days</option>
-                </select>
+                <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                  <SelectTrigger className="flex-1 h-9 text-xs bg-background border-border">
+                    <SelectValue placeholder="All Types" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Types</SelectItem>
+                    <SelectItem value="bug">Bugs</SelectItem>
+                    <SelectItem value="feature_request">Feature Req</SelectItem>
+                    <SelectItem value="billing">Billing</SelectItem>
+                    <SelectItem value="how_to">How To</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Select value={timeFilter} onValueChange={setTimeFilter}>
+                  <SelectTrigger className="flex-1 h-9 text-xs bg-background border-border">
+                    <SelectValue placeholder="All Time" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Time</SelectItem>
+                    <SelectItem value="today">Today</SelectItem>
+                    <SelectItem value="week">Past 7 Days</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-              <select 
-                className="w-full bg-background border border-border rounded-md text-xs px-2 py-1.5 outline-none text-foreground focus:border-primary"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-              >
-                <option value="all">All Statuses</option>
-                <option value="open">Open</option>
-                <option value="in_progress">In Progress</option>
-                <option value="waiting_for_client">Waiting for Client</option>
-                <option value="resolved">Resolved</option>
-                <option value="reopened">Reopened</option>
-              </select>
+
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-full h-9 text-xs bg-background border-border">
+                  <SelectValue placeholder="All Statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="open">Open</SelectItem>
+                  <SelectItem value="in_progress">In Progress</SelectItem>
+                  <SelectItem value="waiting_for_client">Waiting for Client</SelectItem>
+                  <SelectItem value="resolved">Resolved</SelectItem>
+                  <SelectItem value="reopened">Reopened</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
@@ -234,19 +244,25 @@ export default function Helpdesk() {
                   <p className="text-xs text-muted-foreground mt-1.5">Organization: <span className="text-foreground font-medium">{selectedTicket.org_name || selectedTicket.org_id}</span></p>
                 </div>
                 
-                {/* Admin Status Controls */}
-                <div className="flex items-center gap-2 bg-background/50 p-2 rounded-lg border border-border">
-                  <span className="text-xs font-medium text-muted-foreground">Status:</span>
-                  <select 
+          
+                {/* SMOOTH ADMIN STATUS CONTROLS */}
+                <div className="flex items-center gap-2 bg-background/50 p-1.5 rounded-lg border border-border">
+                  <span className="text-xs font-medium text-muted-foreground ml-2">Status:</span>
+                  <Select 
                     value={selectedTicket.status} 
-                    onChange={e => statusMutation.mutate(e.target.value)}
-                    className="bg-transparent text-sm font-bold outline-none cursor-pointer focus:text-primary transition-colors"
+                    onValueChange={val => statusMutation.mutate(val)}
                   >
-                    <option value="open">Open</option>
-                    <option value="in_progress">In Progress</option>
-                    <option value="waiting_for_client">Waiting for Client</option>
-                    <option value="resolved">Mark Resolved</option>
-                  </select>
+                    {/* CHANGED w-auto to w-[140px] to prevent truncation */}
+                    <SelectTrigger className="h-8 border-none bg-transparent shadow-none text-sm font-bold focus:ring-0 focus:ring-offset-0 text-primary w-[160px] gap-2">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent align="end">
+                      <SelectItem value="open">Open</SelectItem>
+                      <SelectItem value="in_progress">In Progress</SelectItem>
+                      <SelectItem value="waiting_for_client">Waiting for Client</SelectItem>
+                      <SelectItem value="resolved">Mark Resolved</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
@@ -265,7 +281,6 @@ export default function Helpdesk() {
 
                 {/* Message History */}
                 {messages?.map(msg => {
-                  // Important: Check for both 'Superadmin' and 'admin' because of the Python Enum mismatch
                   const isAdmin = msg.sender_type === 'admin' || msg.sender_type === 'Superadmin';
                   
                   return (
