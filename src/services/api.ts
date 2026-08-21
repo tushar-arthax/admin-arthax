@@ -1,5 +1,8 @@
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
+// Dispatched on window when the API rejects our token. AuthContext listens.
+export const UNAUTHORIZED_EVENT = 'arthax-admin:unauthorized';
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface AuthUser {
@@ -105,6 +108,12 @@ async function handleResponse<T>(res: Response): Promise<T> {
       const body = await res.json();
       detail = body.detail || body.message || detail;
     } catch { }
+    if (res.status === 401) {
+      // The token is gone or expired. Tell the app once, here, so every
+      // screen tears down together instead of each query rendering its own
+      // "failed to load" against a session that no longer exists.
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
     throw { detail, status: res.status } as ApiError;
   }
   if (res.status === 204) return undefined as unknown as T;

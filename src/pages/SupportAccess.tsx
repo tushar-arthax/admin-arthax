@@ -1,26 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  Building2, Clock, Eye, History, Loader2, LogIn, PenLine, Search, ShieldAlert,
+  Square, Users,
+} from 'lucide-react';
+import { toast } from 'sonner';
+
 import { AdminLayout } from '@/components/layout/AdminLayout';
+import { PageHeader } from '@/components/admin/PageHeader';
+import { Panel } from '@/components/admin/Panel';
+import { EmptyState } from '@/components/admin/EmptyState';
+import { StatusPill } from '@/components/admin/StatusPill';
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
 import {
   supportAccessApi,
   type SupportGrant,
   type SupportScope,
   type SupportTargetUser,
 } from '@/services/api';
-import { toast } from 'sonner';
-import {
-  Building2,
-  Clock,
-  Eye,
-  History,
-  Loader2,
-  LogIn,
-  PenLine,
-  Search,
-  ShieldAlert,
-  Square,
-  X,
-} from 'lucide-react';
+import { qk } from '@/lib/queryKeys';
+import { dateTime } from '@/lib/format';
+import { isLiveGrant } from '@/lib/grants';
+import { cn } from '@/lib/utils';
 
 // Where the CRM lives. The launch handoff hands it a short-lived token, so this
 // has to point at the same deployment the token was minted for.
@@ -45,11 +48,17 @@ function timeLeft(expiresAt?: string | null): string {
   return `${Math.floor(mins / 60)}h ${mins % 60}m left`;
 }
 
-function fmt(ts?: string | null): string {
-  if (!ts) return '—';
-  return new Date(ts).toLocaleString('en-IN', {
-    day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
-  });
+/** Numbered step heading used by the four panels of the open-session form. */
+function Step({ n, label, hint }: { n: number; label: string; hint?: string }) {
+  return (
+    <div className="mb-3 flex items-center gap-2.5">
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-primary/25 bg-primary/10 text-[10px] font-bold text-primary">
+        {n}
+      </span>
+      <span className="text-xs font-bold uppercase tracking-[0.08em] text-foreground">{label}</span>
+      {hint && <span className="text-[11px] text-muted-foreground">{hint}</span>}
+    </div>
+  );
 }
 
 export default function SupportAccess() {
@@ -64,33 +73,33 @@ export default function SupportAccess() {
   const [minutes, setMinutes] = useState(30);
   const [eventsFor, setEventsFor] = useState<SupportGrant | null>(null);
 
-  // Re-render once a minute so the "time left" column stays honest without a
-  // refetch — the value is derived from a timestamp we already hold.
+  // Re-render every half minute so the "time left" column stays honest without
+  // a refetch — the value is derived from a timestamp we already hold, so this
+  // costs nothing on the wire.
   const [, setTick] = useState(0);
   useEffect(() => {
-    const t = setInterval(() => setTick((n) => n + 1), 60_000);
+    const t = setInterval(() => setTick((n) => n + 1), 30_000);
     return () => clearInterval(t);
   }, []);
 
   const { data: orgs = [], isLoading: orgsLoading } = useQuery({
-    queryKey: ['supportOrgs', orgSearch],
+    queryKey: qk.supportOrgs(orgSearch),
     queryFn: () => supportAccessApi.listOrgs(orgSearch || undefined),
   });
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery({
-    queryKey: ['supportTargets', selectedOrgId],
+    queryKey: qk.supportTargets(selectedOrgId),
     queryFn: () => supportAccessApi.listTargets(selectedOrgId as string),
     enabled: !!selectedOrgId,
   });
 
   const { data: sessions = [], isLoading: sessionsLoading } = useQuery({
-    queryKey: ['supportSessions'],
+    queryKey: qk.supportSessions,
     queryFn: () => supportAccessApi.listSessions({ limit: 50 }),
-    refetchInterval: 60_000,
   });
 
   const { data: events = [], isLoading: eventsLoading } = useQuery({
-    queryKey: ['supportEvents', eventsFor?.id],
+    queryKey: qk.supportEvents(eventsFor?.id),
     queryFn: () => supportAccessApi.listEvents(eventsFor!.id),
     enabled: !!eventsFor,
   });
@@ -102,14 +111,17 @@ export default function SupportAccess() {
 
   const openMutation = useMutation({
     mutationFn: supportAccessApi.openSession,
-    onSettled: () => qc.invalidateQueries({ queryKey: ['supportSessions'] }),
   });
 
   const endMutation = useMutation({
     mutationFn: (grantId: string) => supportAccessApi.endSession(grantId),
-    onSuccess: () => {
+    // The endpoint answers with the grant as it now stands, so the row is
+    // rewritten from that answer rather than re-fetching the whole list.
+    onSuccess: (ended) => {
       toast.success('Session ended');
-      qc.invalidateQueries({ queryKey: ['supportSessions'] });
+      qc.setQueryData<SupportGrant[]>(qk.supportSessions, (curr = []) =>
+        curr.map((s) => (s.id === ended.id ? ended : s)),
+      );
     },
     onError: (err: any) => toast.error(err.detail || 'Could not end session'),
   });
@@ -160,6 +172,13 @@ export default function SupportAccess() {
         onSuccess: (res) => {
           toast.success(`Session open as ${res.grant.target_email}`);
 
+          // The grant comes back whole, so the table shows the new session
+          // immediately — no refetch stands between opening it and seeing it.
+          qc.setQueryData<SupportGrant[]>(qk.supportSessions, (curr = []) => [
+            res.grant,
+            ...curr.filter((s) => s.id !== res.grant.id),
+          ]);
+
           // The token rides in the fragment, which browsers never send to the
           // server — so it stays out of access logs and Referer headers.
           const url =
@@ -190,48 +209,42 @@ export default function SupportAccess() {
     );
   };
 
-  const activeSessions = sessions.filter((s) => s.is_active);
+  const activeSessions = sessions.filter(isLiveGrant);
+  const selectedTarget = targets.find((t) => t.id === targetId) || null;
 
   return (
     <AdminLayout>
-      <div className="max-w-7xl mx-auto space-y-8">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <ShieldAlert className="w-6 h-6 text-primary" />
-            Support Access
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Open a scoped, expiring session inside a client's workspace to
-            reproduce what they are seeing. No client password is involved, and
-            their admins are notified every time.
-          </p>
-        </div>
+      <div className="space-y-6 pb-6">
+        <PageHeader
+          icon={ShieldAlert}
+          title="Support Access"
+          description="Open a scoped, expiring session inside a client's workspace to reproduce what they are seeing. No client password is involved, and their admins are notified every time."
+          actions={
+            <StatusPill tone={activeSessions.length > 0 ? 'warning' : 'neutral'} dot pulse={activeSessions.length > 0}>
+              {activeSessions.length} live session{activeSessions.length === 1 ? '' : 's'}
+            </StatusPill>
+          }
+        />
 
         {/* ── Open a session ─────────────────────────────────────────── */}
-        <div className="rounded-xl border border-border/40 bg-card/30 p-6 space-y-6">
-          <h2 className="font-semibold flex items-center gap-2">
-            <LogIn className="w-4 h-4 text-primary" /> Open a session
-          </h2>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Panel title="Open a session" icon={LogIn}>
+          <div className="grid gap-6 lg:grid-cols-2">
             {/* Org picker */}
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                1 · Organisation
-              </label>
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <div>
+              <Step n={1} label="Organisation" />
+              <div className="relative mb-2">
+                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <input
                   value={orgSearch}
                   onChange={(e) => setOrgSearch(e.target.value)}
                   placeholder="Search clients…"
-                  className="w-full pl-9 pr-3 py-2 rounded-lg bg-background border border-border/40 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  className="field h-9 py-0 pl-9 text-[13px]"
                 />
               </div>
-              <div className="max-h-52 overflow-auto rounded-lg border border-border/40 divide-y divide-border/40 custom-scrollbar">
+              <div className="custom-scrollbar max-h-52 divide-y divide-border/40 overflow-auto rounded-xl border border-border/60 bg-background/30">
                 {orgsLoading && (
-                  <div className="p-4 text-sm text-muted-foreground flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+                  <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Loading…
                   </div>
                 )}
                 {!orgsLoading && orgs.length === 0 && (
@@ -241,18 +254,17 @@ export default function SupportAccess() {
                   <button
                     key={o.id}
                     onClick={() => { setSelectedOrgId(o.id); setTargetId(null); }}
-                    className={`w-full text-left px-4 py-2.5 text-sm transition-colors flex items-center justify-between ${
-                      selectedOrgId === o.id
-                        ? 'bg-primary/10 text-primary'
-                        : 'hover:bg-muted/40'
-                    }`}
+                    className={cn(
+                      'flex w-full items-center justify-between px-4 py-2.5 text-left text-sm transition-colors',
+                      selectedOrgId === o.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted/40',
+                    )}
                   >
-                    <span className="flex items-center gap-2">
-                      <Building2 className="w-4 h-4 shrink-0" />
+                    <span className="flex min-w-0 items-center gap-2">
+                      <Building2 className="h-4 w-4 shrink-0" />
                       <span className="truncate">{o.name}</span>
                     </span>
-                    <span className="text-xs text-muted-foreground shrink-0">
-                      {o.user_count} users
+                    <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                      <Users className="h-3 w-3" /> {o.user_count}
                     </span>
                   </button>
                 ))}
@@ -260,19 +272,17 @@ export default function SupportAccess() {
             </div>
 
             {/* Target picker */}
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                2 · View as
-              </label>
+            <div>
+              <Step n={2} label="View as" />
               {!selectedOrgId ? (
-                <div className="rounded-lg border border-dashed border-border/40 p-8 text-center text-sm text-muted-foreground">
+                <div className="rounded-xl border border-dashed border-border/60 p-10 text-center text-sm text-muted-foreground">
                   Pick an organisation first.
                 </div>
               ) : (
-                <div className="max-h-[15.5rem] overflow-auto rounded-lg border border-border/40 divide-y divide-border/40 custom-scrollbar">
+                <div className="custom-scrollbar max-h-[15.5rem] divide-y divide-border/40 overflow-auto rounded-xl border border-border/60 bg-background/30">
                   {targetsLoading && (
-                    <div className="p-4 text-sm text-muted-foreground flex items-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+                    <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Loading…
                     </div>
                   )}
                   {!targetsLoading && targets.length === 0 && (
@@ -285,22 +295,21 @@ export default function SupportAccess() {
                       key={u.id}
                       disabled={!u.is_active}
                       onClick={() => setTargetId(u.id)}
-                      className={`w-full text-left px-4 py-2.5 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                        targetId === u.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted/40'
-                      }`}
+                      className={cn(
+                        'w-full px-4 py-2.5 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                        targetId === u.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted/40',
+                      )}
                     >
                       <div className="flex items-center justify-between gap-3">
                         <span className="truncate">
                           <span className="font-medium">{u.full_name}</span>
                           <span className="text-muted-foreground"> · {u.email}</span>
                         </span>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-muted/60 text-muted-foreground shrink-0">
+                        <span className="shrink-0 rounded-full bg-muted/60 px-2 py-0.5 text-xs text-muted-foreground">
                           {ROLE_LABEL[u.role] ?? u.role}
                         </span>
                       </div>
-                      {!u.is_active && (
-                        <span className="text-xs text-red-400">deactivated</span>
-                      )}
+                      {!u.is_active && <span className="text-xs text-red-400">deactivated</span>}
                     </button>
                   ))}
                 </div>
@@ -308,77 +317,77 @@ export default function SupportAccess() {
             </div>
           </div>
 
-          {/* Scope + reason */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="space-y-3">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                3 · Access level
-              </label>
+          <div className="mt-6 grid gap-6 lg:grid-cols-2">
+            {/* Scope + duration */}
+            <div>
+              <Step n={3} label="Access level" />
               <div className="grid grid-cols-2 gap-3">
                 <button
                   onClick={() => setScope('read')}
-                  className={`rounded-lg border p-3 text-left transition-colors ${
+                  className={cn(
+                    'rounded-xl border p-3.5 text-left transition-all',
                     scope === 'read'
-                      ? 'border-primary bg-primary/10'
-                      : 'border-border/40 hover:bg-muted/40'
-                  }`}
+                      ? 'border-primary/50 bg-primary/10'
+                      : 'border-border/60 hover:border-border hover:bg-muted/30',
+                  )}
                 >
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <Eye className="w-4 h-4" /> Read only
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <Eye className="h-4 w-4" /> Read only
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     Look, don't touch. Covers most tickets.
                   </p>
                 </button>
                 <button
                   onClick={() => setScope('write')}
-                  className={`rounded-lg border p-3 text-left transition-colors ${
+                  className={cn(
+                    'rounded-xl border p-3.5 text-left transition-all',
                     scope === 'write'
-                      ? 'border-amber-500 bg-amber-500/10'
-                      : 'border-border/40 hover:bg-muted/40'
-                  }`}
+                      ? 'border-amber-500/60 bg-amber-500/10'
+                      : 'border-border/60 hover:border-border hover:bg-muted/30',
+                  )}
                 >
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <PenLine className="w-4 h-4" /> Write
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <PenLine className="h-4 w-4" /> Write
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     Full authority of that user. Use sparingly.
                   </p>
                 </button>
               </div>
 
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide block pt-2">
-                Duration
-              </label>
-              <div className="flex flex-wrap gap-2">
-                {DURATIONS.map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setMinutes(m)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                      minutes === m
-                        ? 'border-primary bg-primary/10 text-primary'
-                        : 'border-border/40 text-muted-foreground hover:bg-muted/40'
-                    }`}
-                  >
-                    {m < 60 ? `${m} min` : `${m / 60}h`}
-                  </button>
-                ))}
+              <div className="mt-5">
+                <Step n={4} label="Duration" hint="the session dies on its own" />
+                <div className="flex flex-wrap gap-2">
+                  {DURATIONS.map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setMinutes(m)}
+                      className={cn(
+                        'rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors',
+                        minutes === m
+                          ? 'border-primary/50 bg-primary/10 text-primary'
+                          : 'border-border/60 text-muted-foreground hover:bg-muted/40',
+                      )}
+                    >
+                      {m < 60 ? `${m} min` : `${m / 60}h`}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
-            <div className="space-y-3">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                4 · Why <span className="text-red-400">*</span>
-              </label>
+            {/* Reason */}
+            <div>
+              <Step n={5} label="Why" hint="required" />
               <textarea
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 rows={3}
                 placeholder="e.g. Leads list renders empty for this rep since 18 Aug"
-                className="w-full px-3 py-2 rounded-lg bg-background border border-border/40 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+                className="field resize-none"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="mt-2 text-xs text-muted-foreground">
                 Shown to the client in their notification and in their own access
                 log. Write it for them, not for us.
               </p>
@@ -386,210 +395,220 @@ export default function SupportAccess() {
                 value={ticketRef}
                 onChange={(e) => setTicketRef(e.target.value)}
                 placeholder="Ticket reference (optional)"
-                className="w-full px-3 py-2 rounded-lg bg-background border border-border/40 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                className="field mt-3"
               />
             </div>
           </div>
 
-          <div className="flex items-center justify-between gap-4 pt-2 border-t border-border/40">
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-border/50 pt-5">
             <p className="text-xs text-muted-foreground">
-              {selectedOrg
-                ? <>Opening as a member of <span className="text-foreground">{selectedOrg.name}</span>. Their admins are notified immediately.</>
-                : 'Their admins are notified immediately.'}
+              {selectedTarget ? (
+                <>
+                  Opening as <span className="font-medium text-foreground">{selectedTarget.email}</span>
+                  {selectedOrg && <> at <span className="font-medium text-foreground">{selectedOrg.name}</span></>}
+                  {' '}· <span className={scope === 'write' ? 'text-amber-400' : 'text-foreground'}>{scope}</span> access for {minutes < 60 ? `${minutes} minutes` : `${minutes / 60} hours`}. Their admins are notified immediately.
+                </>
+              ) : (
+                'Pick an organisation and a user. Their admins are notified immediately.'
+              )}
             </p>
             <button
               onClick={handleOpen}
               disabled={!canOpen}
-              className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition-opacity shrink-0"
+              className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:shadow-glow disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {openMutation.isPending
-                ? <Loader2 className="w-4 h-4 animate-spin" />
-                : <LogIn className="w-4 h-4" />}
+              {openMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <LogIn className="h-4 w-4" />
+              )}
               Open session &amp; launch CRM
             </button>
           </div>
-        </div>
+        </Panel>
 
         {/* ── Sessions ───────────────────────────────────────────────── */}
-        <div className="rounded-xl border border-border/40 bg-card/30 overflow-hidden">
-          <div className="p-5 border-b border-border/40 flex items-center justify-between">
-            <h2 className="font-semibold flex items-center gap-2">
-              <History className="w-4 h-4 text-primary" /> Sessions
-            </h2>
+        <Panel
+          flush
+          title="Sessions"
+          icon={History}
+          actions={
             <span className="text-xs text-muted-foreground">
               {activeSessions.length} active · {sessions.length} recent
             </span>
-          </div>
-
+          }
+        >
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-muted/20 text-xs uppercase text-muted-foreground">
+              <thead className="border-b border-border/50 bg-surface-2/40 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground">
                 <tr>
-                  <th className="text-left font-medium px-5 py-3">Client</th>
-                  <th className="text-left font-medium px-5 py-3">Viewed as</th>
-                  <th className="text-left font-medium px-5 py-3">By</th>
-                  <th className="text-left font-medium px-5 py-3">Scope</th>
-                  <th className="text-left font-medium px-5 py-3">Reason</th>
-                  <th className="text-left font-medium px-5 py-3">Started</th>
-                  <th className="text-left font-medium px-5 py-3">State</th>
-                  <th className="text-right font-medium px-5 py-3">Actions</th>
+                  <th className="px-5 py-3.5 text-left">Client</th>
+                  <th className="px-5 py-3.5 text-left">Viewed as</th>
+                  <th className="px-5 py-3.5 text-left">By</th>
+                  <th className="px-5 py-3.5 text-left">Scope</th>
+                  <th className="px-5 py-3.5 text-left">Reason</th>
+                  <th className="px-5 py-3.5 text-left">Started</th>
+                  <th className="px-5 py-3.5 text-left">State</th>
+                  <th className="px-5 py-3.5 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40">
                 {sessionsLoading && (
-                  <tr><td colSpan={8} className="px-5 py-8 text-center text-muted-foreground">
-                    <Loader2 className="w-4 h-4 animate-spin inline mr-2" /> Loading…
-                  </td></tr>
-                )}
-                {!sessionsLoading && sessions.length === 0 && (
-                  <tr><td colSpan={8} className="px-5 py-8 text-center text-muted-foreground">
-                    No support sessions yet.
-                  </td></tr>
-                )}
-                {sessions.map((s) => (
-                  <tr key={s.id} className="hover:bg-muted/20">
-                    <td className="px-5 py-3">{s.org_name || '—'}</td>
-                    <td className="px-5 py-3">
-                      <div className="truncate max-w-[14rem]">{s.target_email}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {ROLE_LABEL[s.target_role ?? ''] ?? s.target_role}
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 text-muted-foreground truncate max-w-[12rem]">
-                      {s.actor_email}
-                    </td>
-                    <td className="px-5 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${
-                        s.scope === 'write'
-                          ? 'bg-amber-500/15 text-amber-400'
-                          : 'bg-muted/60 text-muted-foreground'
-                      }`}>
-                        {s.scope}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 max-w-[18rem]">
-                      <div className="truncate" title={s.reason}>{s.reason}</div>
-                      {s.ticket_ref && (
-                        <div className="text-xs text-muted-foreground">{s.ticket_ref}</div>
-                      )}
-                    </td>
-                    <td className="px-5 py-3 text-muted-foreground whitespace-nowrap">
-                      {fmt(s.started_at)}
-                    </td>
-                    <td className="px-5 py-3 whitespace-nowrap">
-                      {s.is_active ? (
-                        <span className="text-xs text-emerald-400 flex items-center gap-1">
-                          <Clock className="w-3 h-3" /> {timeLeft(s.expires_at)}
-                        </span>
-                      ) : s.revoked_at ? (
-                        <span className="text-xs text-muted-foreground">ended</span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">expired</span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3">
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => setEventsFor(s)}
-                          className="text-xs px-2 py-1 rounded-md border border-border/40 hover:bg-muted/40 flex items-center gap-1"
-                        >
-                          <History className="w-3 h-3" /> {s.request_count}
-                        </button>
-                        {s.is_active && (
-                          <button
-                            onClick={() => endMutation.mutate(s.id)}
-                            disabled={endMutation.isPending}
-                            className="text-xs px-2 py-1 rounded-md border border-red-400/40 text-red-400 hover:bg-red-400/10 flex items-center gap-1 disabled:opacity-40"
-                          >
-                            <Square className="w-3 h-3" /> End
-                          </button>
-                        )}
-                      </div>
+                  <tr>
+                    <td colSpan={8} className="px-5 py-8 text-center text-muted-foreground">
+                      <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> Loading…
                     </td>
                   </tr>
-                ))}
+                )}
+                {!sessionsLoading && sessions.length === 0 && (
+                  <tr>
+                    <td colSpan={8}>
+                      <EmptyState
+                        icon={ShieldAlert}
+                        title="No support sessions yet"
+                        description="Every session opened from this screen is recorded here, with the routes it touched."
+                      />
+                    </td>
+                  </tr>
+                )}
+                {sessions.map((s) => {
+                  const live = isLiveGrant(s);
+                  return (
+                    <tr key={s.id} className={cn('transition-colors hover:bg-muted/20', live && 'bg-primary/[0.03]')}>
+                      <td className="px-5 py-3.5 font-medium">{s.org_name || '—'}</td>
+                      <td className="px-5 py-3.5">
+                        <div className="max-w-[14rem] truncate">{s.target_email}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {ROLE_LABEL[s.target_role ?? ''] ?? s.target_role}
+                        </div>
+                      </td>
+                      <td className="max-w-[12rem] truncate px-5 py-3.5 text-muted-foreground">
+                        {s.actor_email}
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <StatusPill tone={s.scope === 'write' ? 'warning' : 'neutral'}>{s.scope}</StatusPill>
+                      </td>
+                      <td className="max-w-[18rem] px-5 py-3.5">
+                        <div className="truncate" title={s.reason}>{s.reason}</div>
+                        {s.ticket_ref && (
+                          <div className="text-xs text-muted-foreground">{s.ticket_ref}</div>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3.5 text-muted-foreground">
+                        {dateTime(s.started_at)}
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3.5">
+                        {live ? (
+                          <StatusPill tone="success" dot pulse>
+                            <Clock className="h-2.5 w-2.5" /> {timeLeft(s.expires_at)}
+                          </StatusPill>
+                        ) : s.revoked_at ? (
+                          <span className="text-xs text-muted-foreground">ended</span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">expired</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => setEventsFor(s)}
+                            className="flex items-center gap-1 rounded-md border border-border/60 px-2 py-1 text-xs transition-colors hover:border-primary/40 hover:text-primary"
+                          >
+                            <History className="h-3 w-3" /> {s.request_count}
+                          </button>
+                          {live && (
+                            <button
+                              onClick={() => endMutation.mutate(s.id)}
+                              disabled={endMutation.isPending && endMutation.variables === s.id}
+                              className="flex items-center gap-1 rounded-md border border-red-400/40 px-2 py-1 text-xs text-red-400 transition-colors hover:bg-red-400/10 disabled:opacity-40"
+                            >
+                              {endMutation.isPending && endMutation.variables === s.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Square className="h-3 w-3" />
+                              )}
+                              End
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-        </div>
+        </Panel>
       </div>
 
       {/* ── Event trail ──────────────────────────────────────────────── */}
-      {eventsFor && (
-        <div
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6"
-          onClick={() => setEventsFor(null)}
-        >
-          <div
-            className="bg-card border border-border/40 rounded-xl w-full max-w-3xl max-h-[80vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-5 border-b border-border/40 flex items-start justify-between gap-4">
-              <div>
-                <h3 className="font-semibold">Access trail</h3>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {eventsFor.actor_email} as {eventsFor.target_email} · {eventsFor.reason}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Routes only — no record here contains client data.
-                </p>
+      <Dialog open={!!eventsFor} onOpenChange={(open) => !open && setEventsFor(null)}>
+        <DialogContent className="max-h-[80vh] max-w-3xl overflow-hidden border-border/60 bg-card p-0">
+          <DialogHeader className="border-b border-border/50 p-5">
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <History className="h-4 w-4 text-primary" /> Access trail
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              {eventsFor?.actor_email} as {eventsFor?.target_email} · {eventsFor?.reason}
+              <br />
+              Routes only — no record here contains client data.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="custom-scrollbar max-h-[55vh] overflow-auto p-5">
+            {eventsLoading && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading…
               </div>
-              <button
-                onClick={() => setEventsFor(null)}
-                className="text-muted-foreground hover:text-foreground shrink-0"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="overflow-auto custom-scrollbar p-5">
-              {eventsLoading && (
-                <div className="text-sm text-muted-foreground flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin" /> Loading…
-                </div>
-              )}
-              {!eventsLoading && events.length === 0 && (
-                <div className="text-sm text-muted-foreground">
-                  Nothing was requested during this session.
-                </div>
-              )}
-              {events.length > 0 && (
-                <table className="w-full text-sm">
-                  <thead className="text-xs uppercase text-muted-foreground">
-                    <tr>
-                      <th className="text-left font-medium pb-2">Time</th>
-                      <th className="text-left font-medium pb-2">Method</th>
-                      <th className="text-left font-medium pb-2">Route</th>
-                      <th className="text-right font-medium pb-2">Status</th>
+            )}
+            {!eventsLoading && events.length === 0 && (
+              <div className="text-sm text-muted-foreground">
+                Nothing was requested during this session.
+              </div>
+            )}
+            {events.length > 0 && (
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+                  <tr>
+                    <th className="pb-2 text-left font-bold">Time</th>
+                    <th className="pb-2 text-left font-bold">Method</th>
+                    <th className="pb-2 text-left font-bold">Route</th>
+                    <th className="pb-2 text-right font-bold">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/40">
+                  {events.map((e, i) => (
+                    <tr key={i}>
+                      <td className="whitespace-nowrap py-2 pr-4 text-muted-foreground">
+                        {dateTime(e.occurred_at)}
+                      </td>
+                      <td className="py-2 pr-4">
+                        <span
+                          className={cn(
+                            'font-mono text-xs',
+                            e.method === 'GET' ? 'text-muted-foreground' : 'text-amber-400',
+                          )}
+                        >
+                          {e.method}
+                        </span>
+                      </td>
+                      <td className="break-all py-2 font-mono text-xs">{e.route_template}</td>
+                      <td
+                        className={cn(
+                          'py-2 text-right text-xs',
+                          (e.status_code ?? 0) >= 400 ? 'text-red-400' : 'text-muted-foreground',
+                        )}
+                      >
+                        {e.status_code ?? '—'}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/40">
-                    {events.map((e, i) => (
-                      <tr key={i}>
-                        <td className="py-2 text-muted-foreground whitespace-nowrap pr-4">
-                          {fmt(e.occurred_at)}
-                        </td>
-                        <td className="py-2 pr-4">
-                          <span className={`text-xs font-mono ${
-                            e.method === 'GET' ? 'text-muted-foreground' : 'text-amber-400'
-                          }`}>
-                            {e.method}
-                          </span>
-                        </td>
-                        <td className="py-2 font-mono text-xs break-all">{e.route_template}</td>
-                        <td className={`py-2 text-right text-xs ${
-                          (e.status_code ?? 0) >= 400 ? 'text-red-400' : 'text-muted-foreground'
-                        }`}>
-                          {e.status_code ?? '—'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
     </AdminLayout>
   );
 }

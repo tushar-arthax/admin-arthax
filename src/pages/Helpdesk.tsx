@@ -1,69 +1,129 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { AdminLayout } from '@/components/layout/AdminLayout';
-import { adminSupportApi, SupportTicket } from '@/services/api';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  Bug, CreditCard, EyeOff, FilterX, HelpCircle, Inbox, Lightbulb, LifeBuoy, Lock,
+  MessageSquare, Search, Send, Loader2, Building2, Clock,
+} from 'lucide-react';
 import { toast } from 'sonner';
-import { LifeBuoy, Send, Lock, EyeOff, Search, FilterX, Bug, Lightbulb, CreditCard, HelpCircle, MessageSquare } from 'lucide-react';
 
-// IMPORT YOUR CUSTOM SMOOTH UI COMPONENTS HERE
+import { AdminLayout } from '@/components/layout/AdminLayout';
+import { EmptyState } from '@/components/admin/EmptyState';
+import { StatusPill, Tone } from '@/components/admin/StatusPill';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useAuth } from '@/contexts/AuthContext';
+import {
+  adminSupportApi, SupportMessage, SupportTicket, TicketStatus,
+} from '@/services/api';
+import { qk } from '@/lib/queryKeys';
+import { clockTime, initials, nowNaive, relativeTime, titleCase } from '@/lib/format';
+import { cn } from '@/lib/utils';
+
+const STATUS_TONE: Record<string, Tone> = {
+  open: 'primary',
+  in_progress: 'warning',
+  waiting_for_client: 'purple',
+  resolved: 'success',
+  closed: 'neutral',
+  reopened: 'danger',
+};
+
+const PRIORITY_TONE: Record<string, Tone> = {
+  low: 'neutral',
+  medium: 'info',
+  high: 'warning',
+  critical: 'danger',
+};
+
+const PRIORITY_BAR: Record<string, string> = {
+  low: 'bg-zinc-600',
+  medium: 'bg-blue-500',
+  high: 'bg-amber-500',
+  critical: 'bg-red-500',
+};
+
+function categoryOf(category: string) {
+  switch (category) {
+    case 'bug': return { icon: Bug, label: 'Bug', className: 'text-red-400' };
+    case 'billing': return { icon: CreditCard, label: 'Billing', className: 'text-emerald-400' };
+    case 'feature_request': return { icon: Lightbulb, label: 'Feature', className: 'text-amber-400' };
+    case 'how_to': return { icon: HelpCircle, label: 'How-to', className: 'text-blue-400' };
+    default: return { icon: MessageSquare, label: 'General', className: 'text-zinc-400' };
+  }
+}
+
+/** Day label above the first message of each calendar day. */
+function dayLabel(ts: string): string {
+  const d = new Date(ts);
+  const today = new Date();
+  const yesterday = new Date(Date.now() - 86_400_000);
+  if (d.toDateString() === today.toDateString()) return 'Today';
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
 
 export default function Helpdesk() {
   const qc = useQueryClient();
+  const { user } = useAuth();
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // State
-  const [selectedTicket, setSelectedTicket] = useState<SupportTicket | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const [isInternal, setIsInternal] = useState(false);
 
-  // Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [timeFilter, setTimeFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
 
   const { data: tickets, isLoading: isTicketsLoading } = useQuery({
-    queryKey: ['adminTickets'],
+    queryKey: qk.tickets,
     queryFn: adminSupportApi.list,
   });
 
-  const { data: messages } = useQuery({
-    queryKey: ['adminTicketMessages', selectedTicket?.id],
-    queryFn: () => adminSupportApi.getMessages(selectedTicket!.id),
-    enabled: !!selectedTicket?.id,
-    refetchInterval: 60000, 
+  // The open ticket is looked up from the list cache rather than copied into
+  // component state. A status change written into that cache is therefore
+  // visible in the header and the queue row at the same instant, with no second
+  // copy to keep in step.
+  const selectedTicket = useMemo(
+    () => tickets?.find((t) => t.id === selectedId) ?? null,
+    [tickets, selectedId],
+  );
+
+  const { data: messages, isLoading: messagesLoading } = useQuery({
+    queryKey: qk.ticketMessages(selectedId ?? ''),
+    queryFn: () => adminSupportApi.getMessages(selectedId as string),
+    enabled: !!selectedId,
   });
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, selectedId]);
 
-  // ─── FILTER LOGIC ──────────────────────────────────────────────────────────
+  // ─── Filters ───────────────────────────────────────────────────────────
   const filteredTickets = useMemo(() => {
     if (!tickets) return [];
-    
-    return tickets.filter(t => {
-      const searchLower = searchQuery.toLowerCase();
-      const orgName = t.org_name?.toLowerCase() || '';
-      const matchesSearch = 
-        t.subject.toLowerCase().includes(searchLower) || 
+    const searchLower = searchQuery.trim().toLowerCase();
+
+    return tickets.filter((t) => {
+      const matchesSearch =
+        !searchLower ||
+        t.subject.toLowerCase().includes(searchLower) ||
         t.ticket_number.toLowerCase().includes(searchLower) ||
-        orgName.includes(searchLower);
+        (t.org_name?.toLowerCase() || '').includes(searchLower);
 
       const matchesStatus = statusFilter === 'all' || t.status === statusFilter;
       const matchesCategory = categoryFilter === 'all' || t.category === categoryFilter;
 
       let matchesTime = true;
       if (timeFilter !== 'all') {
-        const ticketDate = new Date(t.created_at);
-        const now = new Date();
+        const ticketDate = new Date(t.created_at).getTime();
+        const day = 86_400_000;
         if (timeFilter === 'today') {
-          matchesTime = ticketDate.toDateString() === now.toDateString();
+          matchesTime = new Date(t.created_at).toDateString() === new Date().toDateString();
         } else if (timeFilter === 'week') {
-          matchesTime = ticketDate >= new Date(now.setDate(now.getDate() - 7));
+          matchesTime = ticketDate >= Date.now() - 7 * day;
         } else if (timeFilter === 'month') {
-          matchesTime = ticketDate >= new Date(now.setDate(now.getDate() - 30));
+          matchesTime = ticketDate >= Date.now() - 30 * day;
         }
       }
 
@@ -71,284 +131,470 @@ export default function Helpdesk() {
     });
   }, [tickets, searchQuery, statusFilter, timeFilter, categoryFilter]);
 
-  // ─── MUTATIONS ─────────────────────────────────────────────────────────────
-  const replyMutation = useMutation({
-    mutationFn: (data: {content: string, is_internal: boolean}) => adminSupportApi.reply(selectedTicket!.id, data),
-    onSuccess: () => {
-      setReplyText('');
-      setIsInternal(false);
-      qc.invalidateQueries({ queryKey: ['adminTicketMessages', selectedTicket?.id] });
-      qc.invalidateQueries({ queryKey: ['adminTickets'] });
+  // Inbox behaviour: land on the top of the queue instead of an empty pane.
+  useEffect(() => {
+    if (!selectedId && filteredTickets.length > 0) {
+      setSelectedId(filteredTickets[0].id);
     }
+  }, [filteredTickets, selectedId]);
+
+  const clearFilters = () => {
+    setSearchQuery('');
+    setStatusFilter('all');
+    setTimeFilter('all');
+    setCategoryFilter('all');
+  };
+
+  // ─── Mutations ─────────────────────────────────────────────────────────
+  // Both write through the cache: the reply appears the moment it is sent and
+  // is then reconciled with the row the server actually stored.
+  const replyMutation = useMutation({
+    mutationFn: (data: { content: string; is_internal: boolean }) =>
+      adminSupportApi.reply(selectedId as string, data),
+
+    onMutate: async (data) => {
+      const key = qk.ticketMessages(selectedId as string);
+      await qc.cancelQueries({ queryKey: key });
+      const previous = qc.getQueryData<SupportMessage[]>(key);
+
+      const pendingId = `pending-${Date.now()}`;
+      const optimistic: SupportMessage = {
+        id: pendingId,
+        ticket_id: selectedId as string,
+        sender_type: 'Superadmin',
+        sender_id: user?.id ?? '',
+        sender_name: user?.full_name ?? 'You',
+        content: data.content,
+        is_internal: data.is_internal,
+        created_at: nowNaive(),
+      };
+
+      qc.setQueryData<SupportMessage[]>(key, [...(previous ?? []), optimistic]);
+      return { previous, pendingId, key };
+    },
+
+    onSuccess: (saved, _data, ctx) => {
+      // Swap the placeholder for the stored row — same id, timestamps and
+      // sender the rest of the platform will see.
+      qc.setQueryData<SupportMessage[]>(ctx!.key, (curr = []) =>
+        curr.map((m) => (m.id === ctx!.pendingId ? saved : m)),
+      );
+    },
+
+    onError: (err: any, data, ctx) => {
+      if (ctx?.previous) qc.setQueryData(ctx.key, ctx.previous);
+      setReplyText(data.content); // give the text back rather than losing it
+      toast.error(err?.detail || 'Reply failed to send');
+    },
   });
 
   const statusMutation = useMutation({
-    mutationFn: (status: any) => adminSupportApi.updateStatus(selectedTicket!.id, status),
-    onSuccess: () => {
-      toast.success('Status updated');
-      qc.invalidateQueries({ queryKey: ['adminTickets'] });
-      if (selectedTicket) setSelectedTicket({...selectedTicket, status: statusMutation.variables as any});
-    }
+    mutationFn: (status: TicketStatus) => adminSupportApi.updateStatus(selectedId as string, status),
+
+    onMutate: async (status) => {
+      await qc.cancelQueries({ queryKey: qk.tickets });
+      const previous = qc.getQueryData<SupportTicket[]>(qk.tickets);
+      qc.setQueryData<SupportTicket[]>(qk.tickets, (curr = []) =>
+        curr.map((t) => (t.id === selectedId ? { ...t, status } : t)),
+      );
+      return { previous };
+    },
+
+    onSuccess: (res) => {
+      toast.success(res?.message || 'Status updated');
+      // The queue counters on the sidebar come from the analytics cache — let
+      // them catch up once, on this event, rather than on a timer.
+      qc.invalidateQueries({ queryKey: qk.dashboard });
+    },
+
+    onError: (err: any, _status, ctx) => {
+      if (ctx?.previous) qc.setQueryData(qk.tickets, ctx.previous);
+      toast.error(err?.detail || 'Could not update status');
+    },
   });
 
   const handleReplySubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!replyText.trim()) return;
-    replyMutation.mutate({ content: replyText, is_internal: isInternal });
+    const content = replyText.trim();
+    if (!content || !selectedId) return;
+    setReplyText('');
+    const internal = isInternal;
+    setIsInternal(false);
+    replyMutation.mutate({ content, is_internal: internal });
   };
 
-  // ─── UI HELPERS ────────────────────────────────────────────────────────────
-  const getStatusColor = (s: string) => {
-    switch(s) {
-      case 'open': return 'bg-primary/10 text-primary border-primary/20';
-      case 'in_progress': return 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20';
-      case 'resolved': return 'bg-green-500/10 text-green-500 border-green-500/20';
-      case 'waiting_for_client': return 'bg-purple-500/10 text-purple-400 border-purple-500/20';
-      case 'closed': return 'bg-zinc-800 text-zinc-400 border-zinc-700';
-      case 'reopened': return 'bg-red-500/10 text-red-500 border-red-500/20';
-      default: return 'bg-zinc-800 text-zinc-400';
-    }
-  };
-
-  const getCategoryDetails = (c: string) => {
-    switch(c) {
-      case 'bug': return { icon: <Bug className="w-3.5 h-3.5 text-red-400" />, label: "Bug / Issue" };
-      case 'billing': return { icon: <CreditCard className="w-3.5 h-3.5 text-emerald-400" />, label: "Billing" };
-      case 'feature_request': return { icon: <Lightbulb className="w-3.5 h-3.5 text-yellow-400" />, label: "Feature Req" };
-      case 'how_to': return { icon: <HelpCircle className="w-3.5 h-3.5 text-blue-400" />, label: "How-To" };
-      default: return { icon: <MessageSquare className="w-3.5 h-3.5 text-zinc-400" />, label: "General" };
-    }
-  };
+  const queueCounts = useMemo(() => {
+    const open = (tickets ?? []).filter((t) =>
+      ['open', 'in_progress', 'reopened'].includes(t.status),
+    ).length;
+    return { open, total: tickets?.length ?? 0 };
+  }, [tickets]);
 
   return (
     <AdminLayout>
-      <div className="h-[calc(100vh-120px)] flex gap-6">
-        
-        {/* ─── LEFT COLUMN: TICKET LIST & FILTERS ─── */}
-        <div className="w-[380px] rounded-2xl border border-border/60 bg-card/50 flex flex-col overflow-hidden shadow-sm shrink-0">
-          
-          <div className="p-4 border-b border-border/40 bg-muted/20 shrink-0">
-            <h3 className="font-bold flex items-center gap-2 mb-4"><LifeBuoy className="w-5 h-5 text-primary" /> Global Support Queue</h3>
-            
-            {/* Filters */}
-            <div className="space-y-2.5">
+      <div className="flex h-[calc(100vh-8rem)] min-h-[540px] flex-col gap-5 lg:flex-row">
+        {/* ── Queue ──────────────────────────────────────────────────── */}
+        <div className="panel flex w-full shrink-0 flex-col overflow-hidden max-lg:h-[45%] lg:w-[340px] xl:w-[368px]">
+          <div className="shrink-0 border-b border-border/50 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="flex items-center gap-2 text-sm font-semibold">
+                <LifeBuoy className="h-4 w-4 text-primary" /> Support queue
+              </h2>
+              <StatusPill tone={queueCounts.open > 0 ? 'warning' : 'success'} dot pulse={queueCounts.open > 0}>
+                {queueCounts.open} open
+              </StatusPill>
+            </div>
+
+            <div className="space-y-2">
               <div className="relative">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <input 
-                  placeholder="Search Ticket ID, Subject, Org..." 
-                  className="w-full pl-9 bg-background border border-border rounded-lg h-9 text-sm outline-none focus:border-primary transition-colors"
+                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  placeholder="Search ticket, subject or org…"
+                  className="field h-9 py-0 pl-9 text-[13px]"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
-              
-              {/* BEAUTIFUL CUSTOM DROPDOWNS */}
+
               <div className="flex gap-2">
                 <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                  <SelectTrigger className="flex-1 h-9 text-xs bg-background border-border">
-                    <SelectValue placeholder="All Types" />
+                  <SelectTrigger className="h-8 flex-1 border-border/70 bg-background/60 text-[11px]">
+                    <SelectValue placeholder="All types" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Types</SelectItem>
+                    <SelectItem value="all">All types</SelectItem>
                     <SelectItem value="bug">Bugs</SelectItem>
-                    <SelectItem value="feature_request">Feature Req</SelectItem>
+                    <SelectItem value="feature_request">Feature request</SelectItem>
                     <SelectItem value="billing">Billing</SelectItem>
-                    <SelectItem value="how_to">How To</SelectItem>
+                    <SelectItem value="how_to">How-to</SelectItem>
+                    <SelectItem value="general">General</SelectItem>
                   </SelectContent>
                 </Select>
 
                 <Select value={timeFilter} onValueChange={setTimeFilter}>
-                  <SelectTrigger className="flex-1 h-9 text-xs bg-background border-border">
-                    <SelectValue placeholder="All Time" />
+                  <SelectTrigger className="h-8 flex-1 border-border/70 bg-background/60 text-[11px]">
+                    <SelectValue placeholder="All time" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Time</SelectItem>
+                    <SelectItem value="all">All time</SelectItem>
                     <SelectItem value="today">Today</SelectItem>
-                    <SelectItem value="week">Past 7 Days</SelectItem>
+                    <SelectItem value="week">Past 7 days</SelectItem>
+                    <SelectItem value="month">Past 30 days</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-full h-9 text-xs bg-background border-border">
-                  <SelectValue placeholder="All Statuses" />
+                <SelectTrigger className="h-8 w-full border-border/70 bg-background/60 text-[11px]">
+                  <SelectValue placeholder="All statuses" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="all">All statuses</SelectItem>
                   <SelectItem value="open">Open</SelectItem>
-                  <SelectItem value="in_progress">In Progress</SelectItem>
-                  <SelectItem value="waiting_for_client">Waiting for Client</SelectItem>
+                  <SelectItem value="in_progress">In progress</SelectItem>
+                  <SelectItem value="waiting_for_client">Waiting for client</SelectItem>
                   <SelectItem value="resolved">Resolved</SelectItem>
+                  <SelectItem value="closed">Closed</SelectItem>
                   <SelectItem value="reopened">Reopened</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
+          <div className="custom-scrollbar flex-1 space-y-1.5 overflow-y-auto p-2.5">
             {isTicketsLoading ? (
-              <p className="p-4 text-center text-muted-foreground text-sm mt-10">Loading tickets...</p>
+              [0, 1, 2, 3, 4].map((i) => (
+                <div key={i} className="shimmer h-[86px] rounded-xl bg-muted/20" />
+              ))
             ) : filteredTickets.length === 0 ? (
-              <div className="p-8 text-center text-muted-foreground flex flex-col items-center mt-10">
-                <FilterX className="w-10 h-10 mb-3 opacity-20" />
-                <p className="text-sm">No tickets match filters.</p>
-                <button className="text-primary text-sm mt-2 hover:underline" onClick={() => {setSearchQuery(''); setStatusFilter('all'); setTimeFilter('all'); setCategoryFilter('all');}}>
-                  Clear Filters
-                </button>
-              </div>
+              <EmptyState
+                icon={FilterX}
+                title="Nothing matches"
+                description="No ticket in the queue fits the current filters."
+                action={
+                  <button
+                    onClick={clearFilters}
+                    className="rounded-lg border border-border/70 px-3 py-1.5 text-xs font-semibold transition-colors hover:border-primary/40 hover:text-primary"
+                  >
+                    Clear filters
+                  </button>
+                }
+              />
             ) : (
-              filteredTickets.map(t => {
-                const cat = getCategoryDetails(t.category);
+              filteredTickets.map((t) => {
+                const cat = categoryOf(t.category);
+                const active = selectedId === t.id;
                 return (
                   <button
                     key={t.id}
-                    onClick={() => setSelectedTicket(t)}
-                    className={`w-full text-left p-3.5 rounded-xl transition-all border ${selectedTicket?.id === t.id ? 'bg-primary/10 border-primary/30' : 'border-transparent hover:bg-muted/50'}`}
+                    onClick={() => setSelectedId(t.id)}
+                    className={cn(
+                      'group relative w-full overflow-hidden rounded-xl border p-3 pl-4 text-left transition-all duration-200',
+                      active
+                        ? 'border-primary/30 bg-primary/[0.07]'
+                        : 'border-transparent hover:border-border/60 hover:bg-muted/30',
+                    )}
                   >
-                    <div className="flex justify-between items-center mb-1.5">
-                      <span className="text-[11px] font-mono text-muted-foreground">{t.ticket_number}</span>
-                      <span className={`text-[9px] font-bold tracking-wide uppercase px-2 py-0.5 rounded border ${getStatusColor(t.status)}`}>
-                        {t.status.replace(/_/g, ' ')}
-                      </span>
+                    <span
+                      className={cn(
+                        'absolute inset-y-2 left-1 w-[3px] rounded-full transition-opacity',
+                        PRIORITY_BAR[t.priority] ?? 'bg-zinc-700',
+                        active ? 'opacity-100' : 'opacity-50 group-hover:opacity-90',
+                      )}
+                    />
+
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <span className="font-mono text-[10px] text-muted-foreground">{t.ticket_number}</span>
+                      <StatusPill tone={STATUS_TONE[t.status] ?? 'neutral'}>
+                        {titleCase(t.status)}
+                      </StatusPill>
                     </div>
-                    <h4 className="font-medium text-sm text-foreground line-clamp-1 mb-2 pr-2">{t.subject}</h4>
-                    <div className="flex justify-between items-center">
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        {cat.icon} <span>{cat.label}</span>
-                      </div>
-                      <span className="text-[10px] bg-background border border-border px-1.5 py-0.5 rounded-sm max-w-[120px] truncate text-muted-foreground">
-                        {t.org_name || 'Unknown Org'}
+
+                    <h3 className="mb-2 line-clamp-1 text-[13px] font-semibold text-foreground">{t.subject}</h3>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={cn('flex items-center gap-1.5 text-[11px]', cat.className)}>
+                        <cat.icon className="h-3 w-3" /> {cat.label}
+                      </span>
+                      <span className="flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+                        <Building2 className="h-3 w-3 shrink-0" />
+                        <span className="max-w-[110px] truncate">{t.org_name || 'Unknown org'}</span>
+                        <span className="text-muted-foreground/40">·</span>
+                        {relativeTime(t.created_at)}
                       </span>
                     </div>
                   </button>
-                )
+                );
               })
             )}
           </div>
         </div>
 
-        {/* ─── RIGHT COLUMN: CHAT VIEW ─── */}
-        <div className="flex-1 rounded-2xl border border-border/60 bg-card/50 flex flex-col overflow-hidden relative shadow-lg">
+        {/* ── Conversation ───────────────────────────────────────────── */}
+        <div className="panel flex min-w-0 flex-1 flex-col overflow-hidden">
           {selectedTicket ? (
             <>
-              {/* Header */}
-              <div className="p-5 border-b border-border/40 bg-muted/20 flex justify-between items-center shrink-0">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-mono text-xs text-muted-foreground bg-background px-1.5 py-0.5 rounded border border-border">{selectedTicket.ticket_number}</span>
-                    <span className="flex items-center gap-1 text-xs font-medium text-zinc-300">
-                      {getCategoryDetails(selectedTicket.category).icon} {getCategoryDetails(selectedTicket.category).label}
-                    </span>
-                  </div>
-                  <h3 className="font-bold text-xl leading-tight text-zinc-100">{selectedTicket.subject}</h3>
-                  <p className="text-xs text-muted-foreground mt-1.5">Organization: <span className="text-foreground font-medium">{selectedTicket.org_name || selectedTicket.org_id}</span></p>
-                </div>
-                
-          
-                {/* SMOOTH ADMIN STATUS CONTROLS */}
-                <div className="flex items-center gap-2 bg-background/50 p-1.5 rounded-lg border border-border">
-                  <span className="text-xs font-medium text-muted-foreground ml-2">Status:</span>
-                  <Select 
-                    value={selectedTicket.status} 
-                    onValueChange={val => statusMutation.mutate(val)}
-                  >
-                    {/* CHANGED w-auto to w-[140px] to prevent truncation */}
-                    <SelectTrigger className="h-8 border-none bg-transparent shadow-none text-sm font-bold focus:ring-0 focus:ring-offset-0 text-primary w-[160px] gap-2">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent align="end">
-                      <SelectItem value="open">Open</SelectItem>
-                      <SelectItem value="in_progress">In Progress</SelectItem>
-                      <SelectItem value="waiting_for_client">Waiting for Client</SelectItem>
-                      <SelectItem value="resolved">Mark Resolved</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {/* Chat Thread */}
-              <div className="flex-1 overflow-y-auto custom-scrollbar p-6 flex flex-col gap-6 bg-black/10">
-                
-                {/* Client Original Issue (Left Side) */}
-                <div className="w-full flex justify-start">
-                  <div className="flex flex-col gap-1 max-w-[80%]">
-                    <span className="text-[10px] text-muted-foreground px-1">Client • Original Request • {new Date(selectedTicket.created_at).toLocaleString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                    <div className="p-4 rounded-2xl rounded-tl-sm text-sm border border-border bg-muted/30 whitespace-pre-wrap leading-relaxed shadow-sm">
-                      {selectedTicket.description}
+              <header className="shrink-0 border-b border-border/50 bg-gradient-to-b from-white/[0.02] to-transparent px-5 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                      <span className="rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                        {selectedTicket.ticket_number}
+                      </span>
+                      <StatusPill tone={PRIORITY_TONE[selectedTicket.priority] ?? 'neutral'}>
+                        {selectedTicket.priority}
+                      </StatusPill>
+                      {(() => {
+                        const cat = categoryOf(selectedTicket.category);
+                        return (
+                          <span className={cn('flex items-center gap-1 text-[11px] font-medium', cat.className)}>
+                            <cat.icon className="h-3 w-3" /> {cat.label}
+                          </span>
+                        );
+                      })()}
                     </div>
-                  </div>
-                </div>
-
-                {/* Message History */}
-                {messages?.map(msg => {
-                  const isAdmin = msg.sender_type === 'admin' || msg.sender_type === 'Superadmin';
-                  
-                  return (
-                    <div key={msg.id} className={`w-full flex ${isAdmin ? 'justify-end' : 'justify-start'}`}>
-                      <div className="flex flex-col gap-1 max-w-[80%]">
-                        <span className={`text-[10px] text-muted-foreground px-1 flex items-center gap-1 ${isAdmin ? 'justify-end' : 'justify-start'}`}>
-                          {msg.is_internal && <EyeOff className="w-3 h-3 text-yellow-500" />}
-                          {isAdmin ? 'You (Admin)' : 'Client'} • {new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                    <h1 className="truncate text-lg font-bold leading-tight text-foreground">
+                      {selectedTicket.subject}
+                    </h1>
+                    <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <Building2 className="h-3 w-3" />
+                        <span className="font-medium text-foreground">
+                          {selectedTicket.org_name || selectedTicket.org_id}
                         </span>
-                        <div className={`p-4 rounded-2xl text-sm whitespace-pre-wrap leading-relaxed shadow-sm ${
-                          isAdmin 
-                            ? (msg.is_internal 
-                                ? 'bg-yellow-500 text-yellow-950 rounded-tr-sm border border-yellow-600 font-medium' 
-                                : 'bg-primary text-primary-foreground rounded-tr-sm') 
-                            : 'border border-border bg-muted/30 rounded-tl-sm text-foreground'
-                        }`}>
-                          {msg.content}
-                        </div>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Clock className="h-3 w-3" /> raised {relativeTime(selectedTicket.created_at)}
+                      </span>
+                    </p>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-2 rounded-xl border border-border/70 bg-background/50 p-1.5 pl-3">
+                    <span className="text-[11px] font-medium text-muted-foreground">Status</span>
+                    <Select
+                      value={selectedTicket.status}
+                      onValueChange={(val) => statusMutation.mutate(val as TicketStatus)}
+                    >
+                      <SelectTrigger className="h-8 w-[168px] gap-2 border-none bg-transparent text-sm font-semibold text-primary shadow-none focus:ring-0 focus:ring-offset-0">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent align="end">
+                        <SelectItem value="open">Open</SelectItem>
+                        <SelectItem value="in_progress">In progress</SelectItem>
+                        <SelectItem value="waiting_for_client">Waiting for client</SelectItem>
+                        <SelectItem value="resolved">Mark resolved</SelectItem>
+                        <SelectItem value="closed">Close ticket</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {statusMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />}
+                  </div>
+                </div>
+              </header>
+
+              <div className="custom-scrollbar flex flex-1 flex-col gap-5 overflow-y-auto bg-black/20 p-5">
+                {/* The original request always leads the thread. */}
+                <MessageBubble
+                  side="left"
+                  author="Client"
+                  meta={`Original request · ${clockTime(selectedTicket.created_at)}`}
+                  body={selectedTicket.description}
+                  avatar={initials(selectedTicket.org_name || 'Client')}
+                />
+
+                {messagesLoading && !messages ? (
+                  <div className="space-y-3">
+                    <div className="shimmer h-16 w-2/3 rounded-2xl bg-muted/20" />
+                    <div className="shimmer ml-auto h-16 w-1/2 rounded-2xl bg-muted/20" />
+                  </div>
+                ) : (
+                  messages?.map((msg, i) => {
+                    const isAdmin = msg.sender_type === 'admin' || msg.sender_type === 'Superadmin';
+                    const prev = i > 0 ? messages[i - 1] : null;
+                    const showDay =
+                      !prev || dayLabel(prev.created_at) !== dayLabel(msg.created_at);
+                    const pending = msg.id.startsWith('pending-');
+
+                    return (
+                      <div key={msg.id} className="contents">
+                        {showDay && (
+                          <div className="my-1 flex items-center gap-3">
+                            <div className="h-px flex-1 bg-border/50" />
+                            <span className="rounded-full border border-border/60 bg-surface-2/60 px-2.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                              {dayLabel(msg.created_at)}
+                            </span>
+                            <div className="h-px flex-1 bg-border/50" />
+                          </div>
+                        )}
+                        <MessageBubble
+                          side={isAdmin ? 'right' : 'left'}
+                          author={isAdmin ? msg.sender_name || 'You' : msg.sender_name || 'Client'}
+                          meta={clockTime(msg.created_at)}
+                          body={msg.content}
+                          internal={msg.is_internal}
+                          pending={pending}
+                          avatar={initials(msg.sender_name || (isAdmin ? 'Admin' : 'Client'))}
+                        />
                       </div>
-                    </div>
-                  )
-                })}
+                    );
+                  })
+                )}
                 <div ref={chatEndRef} />
               </div>
 
-              {/* Input Area */}
-              <div className="p-4 border-t border-border/40 bg-muted/10 shrink-0">
-                <form onSubmit={handleReplySubmit} className="flex flex-col gap-3">
-                  <div className="flex items-center">
-                    <button 
-                      type="button" 
-                      onClick={() => setIsInternal(!isInternal)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition-all ${isInternal ? 'bg-yellow-500/10 text-yellow-500 border-yellow-500/30' : 'bg-background text-muted-foreground border-border hover:bg-muted'}`}
-                    >
-                      {isInternal ? <Lock className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                      {isInternal ? 'Internal Note Active (Client will NOT see this)' : 'Public Reply'}
-                    </button>
-                  </div>
-                  
-                  <div className="flex gap-2">
-                    <input 
-                      placeholder={isInternal ? "Type a dev note..." : "Reply to client..."}
-                      className="flex-1 bg-background border border-border rounded-lg px-4 py-3 outline-none focus:border-primary transition-colors text-sm"
-                      value={replyText}
-                      onChange={e => setReplyText(e.target.value)}
-                    />
-                    <button 
-                      type="submit" 
-                      disabled={!replyText.trim() || replyMutation.isPending}
-                      className={`px-8 rounded-lg font-medium transition-all flex items-center justify-center disabled:opacity-50 ${isInternal ? 'bg-yellow-500 text-yellow-950 hover:bg-yellow-400' : 'bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/20'}`}
-                    >
-                      <Send className="w-4 h-4" />
-                    </button>
-                  </div>
-                </form>
-              </div>
+              <form
+                onSubmit={handleReplySubmit}
+                className="shrink-0 space-y-2.5 border-t border-border/50 bg-surface-2/30 p-4"
+              >
+                <button
+                  type="button"
+                  onClick={() => setIsInternal((v) => !v)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-all',
+                    isInternal
+                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
+                      : 'border-border/70 bg-background/60 text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {isInternal ? <Lock className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                  {isInternal ? 'Internal note — the client will not see this' : 'Public reply'}
+                </button>
+
+                <div className="flex items-end gap-2">
+                  <textarea
+                    rows={1}
+                    placeholder={isInternal ? 'Type a note for the team…' : 'Reply to the client…'}
+                    className="field max-h-32 min-h-[46px] flex-1 resize-none py-3 text-sm"
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleReplySubmit(e);
+                      }
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    disabled={!replyText.trim() || replyMutation.isPending}
+                    className={cn(
+                      'flex h-[46px] items-center gap-2 rounded-lg px-5 text-sm font-semibold transition-all disabled:opacity-40',
+                      isInternal
+                        ? 'bg-amber-500 text-amber-950 hover:bg-amber-400'
+                        : 'bg-primary text-primary-foreground hover:shadow-glow',
+                    )}
+                  >
+                    {replyMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
+                    <span className="max-sm:hidden">Send</span>
+                  </button>
+                </div>
+                <p className="text-[10px] text-muted-foreground/70">
+                  Enter to send · Shift + Enter for a new line
+                </p>
+              </form>
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-8 text-center">
-              <div className="w-16 h-16 rounded-2xl bg-muted/30 border border-border flex items-center justify-center mb-4 shadow-sm">
-                <LifeBuoy className="w-8 h-8 opacity-50 text-primary" />
-              </div>
-              <h3 className="text-xl font-bold text-foreground">Select a Ticket</h3>
-              <p className="text-sm mt-2 max-w-sm">Choose a ticket from the queue to view the conversation, change status, or reply to the client.</p>
-            </div>
+            <EmptyState
+              className="flex-1"
+              icon={Inbox}
+              title="No ticket selected"
+              description="Pick a ticket from the queue to read the thread, change its status or reply to the client."
+            />
           )}
         </div>
       </div>
     </AdminLayout>
+  );
+}
+
+interface BubbleProps {
+  side: 'left' | 'right';
+  author: string;
+  meta: string;
+  body: string;
+  avatar: string;
+  internal?: boolean;
+  pending?: boolean;
+}
+
+function MessageBubble({ side, author, meta, body, avatar, internal, pending }: BubbleProps) {
+  const right = side === 'right';
+  return (
+    <div className={cn('flex w-full items-end gap-2.5', right ? 'flex-row-reverse' : 'flex-row')}>
+      <div
+        className={cn(
+          'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-bold',
+          right ? 'bg-primary/20 text-primary' : 'bg-muted/60 text-muted-foreground',
+        )}
+      >
+        {avatar}
+      </div>
+
+      <div className={cn('flex max-w-[78%] flex-col gap-1', right && 'items-end')}>
+        <span className="flex items-center gap-1.5 px-1 text-[10px] text-muted-foreground">
+          {internal && <Lock className="h-2.5 w-2.5 text-amber-400" />}
+          <span className="font-medium text-muted-foreground/90">{author}</span>
+          <span className="text-muted-foreground/50">·</span>
+          {pending ? <span className="text-primary/70">sending…</span> : meta}
+        </span>
+
+        <div
+          className={cn(
+            'whitespace-pre-wrap rounded-2xl px-4 py-3 text-[13px] leading-relaxed shadow-sm transition-opacity',
+            pending && 'opacity-60',
+            right
+              ? internal
+                ? 'rounded-tr-sm border border-amber-600/60 bg-amber-500 font-medium text-amber-950'
+                : 'rounded-tr-sm bg-primary text-primary-foreground'
+              : 'rounded-tl-sm border border-border/60 bg-surface-2/70 text-foreground',
+          )}
+        >
+          {body}
+        </div>
+      </div>
+    </div>
   );
 }
