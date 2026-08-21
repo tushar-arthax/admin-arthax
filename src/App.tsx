@@ -12,6 +12,7 @@ import Helpdesk from "./pages/Helpdesk";
 import NotFound from "./pages/NotFound";
 import Onboarding from "./pages/Onboarding.tsx";
 import AdminNotifications from "./pages/AdminNotifications.tsx";
+import SupportAccess from "./pages/SupportAccess.tsx";
 
 const queryClient = new QueryClient();
 
@@ -30,6 +31,7 @@ const AppRoutes = () => {
       <Route path="/onboarding" element={<ProtectedRoute><Onboarding /></ProtectedRoute>} />
       <Route path="/support" element={<ProtectedRoute><Helpdesk /></ProtectedRoute>} />
       <Route path="/notifications" element={<ProtectedRoute><AdminNotifications /></ProtectedRoute>} /> 
+      <Route path="/support-access" element={<ProtectedRoute><SupportAccess /></ProtectedRoute>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );

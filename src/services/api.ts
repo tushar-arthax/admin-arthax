@@ -171,8 +171,94 @@ export const adminAnalyticsApi = {
 };
 
 export const adminNotificationApi = {
-  send: (data: SendNotificationRequest) => 
+  send: (data: SendNotificationRequest) =>
     apiClient.post<{ message: string }>('/api/admin/notifications/send', data),
-  getHistory: (limit: number = 50) => 
+  getHistory: (limit: number = 50) =>
     apiClient.get<AdminNotification[]>(`/api/admin/notifications/history?limit=${limit}`),
+};
+
+// ─── Support Access ──────────────────────────────────────────────────────
+// Opening a session mints a token that resolves to a real user inside the
+// client's org. No client credential is involved at any point — the token is
+// issued on this super admin's own authority.
+
+export type SupportScope = 'read' | 'write';
+
+export interface SupportOrg {
+  id: string;
+  name: string;
+  status?: string;
+  user_count: number;
+}
+
+export interface SupportTargetUser {
+  id: string;
+  email: string;
+  full_name: string;
+  role: 'admin' | 'team_lead' | 'sdr';
+  is_active: boolean;
+  team_name?: string | null;
+}
+
+export interface SupportGrant {
+  id: string;
+  org_id: string;
+  org_name?: string | null;
+  actor_email?: string | null;
+  target_email?: string | null;
+  target_role?: string | null;
+  scope: SupportScope;
+  reason: string;
+  ticket_ref?: string | null;
+  started_at?: string | null;
+  expires_at?: string | null;
+  revoked_at?: string | null;
+  request_count: number;
+  is_active: boolean;
+}
+
+export interface SupportEvent {
+  occurred_at: string;
+  method: string;
+  route_template: string;
+  status_code?: number | null;
+}
+
+export interface OpenSessionRequest {
+  target_user_id: string;
+  scope: SupportScope;
+  reason: string;
+  ticket_ref?: string | null;
+  minutes: number;
+}
+
+export interface OpenSessionResponse {
+  grant: SupportGrant;
+  access_token: string;
+  token_type: string;
+}
+
+const BASE = '/api/admin/support-access';
+
+export const supportAccessApi = {
+  listOrgs: (search?: string) =>
+    apiClient.get<SupportOrg[]>(
+      `${BASE}/organizations${search ? `?search=${encodeURIComponent(search)}` : ''}`,
+    ),
+  listTargets: (orgId: string) =>
+    apiClient.get<SupportTargetUser[]>(`${BASE}/organizations/${orgId}/users`),
+  openSession: (data: OpenSessionRequest) =>
+    apiClient.post<OpenSessionResponse>(`${BASE}/sessions`, data),
+  listSessions: (params?: { orgId?: string; activeOnly?: boolean; limit?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.orgId) sp.set('org_id', params.orgId);
+    if (params?.activeOnly) sp.set('active_only', 'true');
+    if (params?.limit) sp.set('limit', String(params.limit));
+    const qs = sp.toString();
+    return apiClient.get<SupportGrant[]>(`${BASE}/sessions${qs ? `?${qs}` : ''}`);
+  },
+  listEvents: (grantId: string) =>
+    apiClient.get<SupportEvent[]>(`${BASE}/sessions/${grantId}/events`),
+  endSession: (grantId: string) =>
+    apiClient.post<SupportGrant>(`${BASE}/sessions/${grantId}/end`),
 };
