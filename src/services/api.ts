@@ -271,3 +271,49 @@ export const supportAccessApi = {
   endSession: (grantId: string) =>
     apiClient.post<SupportGrant>(`${BASE}/sessions/${grantId}/end`),
 };
+
+// ─── IVR / TeleCMI ─────────────────────────────────────────────────────────
+// Mirrors app/routers/telephony.py (admin_router). One row per client that
+// has connected the TeleCMI app ArthaX created for them.
+
+export interface IvrClientRow {
+  org_id: string;
+  org_name: string;
+  app_id: string;
+  region: string;
+  is_enabled: boolean;
+  /** Connected and has numbers, so IVR can run. */
+  ready: boolean;
+  connected_at: string | null;
+  number_mode: 'shared' | 'dedicated';
+  numbers: string[];
+  max_channels: number;
+  currency: string;
+  last_balance: string | null;
+  /** Set when TeleCMI rejected the saved secret on the last check. */
+  verify_error: string | null;
+  reps_on_ivr: number;
+  calls_7d: number;
+  answered_7d: number;
+  talk_minutes_7d: number;
+  live_now: number;
+  last_webhook_at: string | null;
+  failures_7d: number;
+  latest_failure: string | null;
+}
+
+export interface IvrMonitor {
+  /** The one URL to paste into every client app's Webhooks tab in TeleCMI. */
+  webhook_url: string | null;
+  webhook_configured: boolean;
+  orgs: IvrClientRow[];
+}
+
+export const ivrApi = {
+  monitor: () => apiClient.get<IvrMonitor>('/api/admin/telephony'),
+  refresh: (orgId: string) => apiClient.post<IvrMonitor>(`/api/admin/telephony/${orgId}/refresh`),
+  setEnabled: (orgId: string, enabled: boolean) =>
+    apiClient.post<IvrMonitor>(`/api/admin/telephony/${orgId}/enable`, { enabled }),
+  /** Release the org's TeleCMI app; its reps go back to native calling. */
+  disconnect: (orgId: string) => apiClient.post<IvrMonitor>(`/api/admin/telephony/${orgId}/disconnect`),
+};

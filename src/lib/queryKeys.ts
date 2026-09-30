@@ -19,4 +19,6 @@ export const qk = {
   supportTargets: (orgId: string | null) => ['supportTargets', orgId] as const,
   supportSessions: ['supportSessions'] as const,
   supportEvents: (grantId: string | undefined) => ['supportEvents', grantId] as const,
+
+  ivrMonitor: ['ivrMonitor'] as const,
 } as const;

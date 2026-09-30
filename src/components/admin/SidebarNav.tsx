@@ -1,7 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
-  Bell, Building2, KeyRound, LayoutDashboard, LifeBuoy, LucideIcon,
+  Bell, Building2, KeyRound, LayoutDashboard, LifeBuoy, LucideIcon, PhoneCall,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -28,6 +28,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { name: 'Client Onboarding', short: 'Clients', path: '/onboarding', icon: Building2 },
       { name: 'Helpdesk', short: 'Helpdesk', path: '/support', icon: LifeBuoy, badgeKey: 'openTickets' },
       { name: 'Notifications', short: 'Broadcasts', path: '/notifications', icon: Bell },
+      { name: 'IVR / TeleCMI', short: 'IVR', path: '/ivr', icon: PhoneCall },
     ],
   },
   {
