@@ -1,4 +1,9 @@
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// Local dev with VITE_PROXY_TARGET set: call our own origin and let the Vite
+// proxy (vite.config.ts) forward /api to the remote backend. The browser never
+// makes a cross-origin request, so the server's CORS allow-list never has to
+// include localhost. Ignored in builds — the proxy only exists in `vite` dev.
+const USE_DEV_PROXY = import.meta.env.DEV && !!import.meta.env.VITE_PROXY_TARGET;
+const BASE_URL = USE_DEV_PROXY ? '' : (import.meta.env.VITE_API_URL || 'http://localhost:8000');
 
 // Dispatched on window when the API rejects our token. AuthContext listens.
 export const UNAUTHORIZED_EVENT = 'arthax-admin:unauthorized';

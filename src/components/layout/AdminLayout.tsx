@@ -24,7 +24,9 @@ const COLLAPSE_KEY = 'arthax_admin_sidebar_collapsed';
 
 /** staging-api.arthax.ai -> Staging. Cosmetic, read from the build env. */
 function environmentLabel(): { label: string; tone: string } {
-  const url = (import.meta.env.VITE_API_URL as string) || '';
+  // Through the dev proxy, the backend actually hit is the proxy target.
+  const proxied = import.meta.env.DEV ? (import.meta.env.VITE_PROXY_TARGET as string) : '';
+  const url = proxied || (import.meta.env.VITE_API_URL as string) || '';
   if (/localhost|127\.0\.0\.1/.test(url)) return { label: 'Local', tone: 'text-blue-400 border-blue-500/25 bg-blue-500/10' };
   if (/staging|dev/.test(url)) return { label: 'Staging', tone: 'text-amber-400 border-amber-500/25 bg-amber-500/10' };
   return { label: 'Production', tone: 'text-emerald-400 border-emerald-500/25 bg-emerald-500/10' };
