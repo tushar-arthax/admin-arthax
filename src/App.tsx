@@ -15,6 +15,7 @@ import Onboarding from "./pages/Onboarding.tsx";
 import AdminNotifications from "./pages/AdminNotifications.tsx";
 import SupportAccess from "./pages/SupportAccess.tsx";
 import IvrCalling from "./pages/IvrCalling.tsx";
+import Coupons from "./pages/Coupons.tsx";
 
 // Route Protection logic
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -33,6 +34,7 @@ const AppRoutes = () => {
       <Route path="/notifications" element={<ProtectedRoute><AdminNotifications /></ProtectedRoute>} />
       <Route path="/support-access" element={<ProtectedRoute><SupportAccess /></ProtectedRoute>} />
       <Route path="/ivr" element={<ProtectedRoute><IvrCalling /></ProtectedRoute>} />
+      <Route path="/coupons" element={<ProtectedRoute><Coupons /></ProtectedRoute>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );

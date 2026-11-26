@@ -171,9 +171,110 @@ export const adminSupportApi = {
     apiClient.post<SupportMessage>(`/api/admin/support/tickets/${id}/messages`, data),
 };
 
+/** One provisioned client, with its live trial and activation state. */
+export interface ClientRow {
+  id: string;
+  org_id: string;
+  company_name: string;
+  admin_name: string;
+  admin_email: string;
+  admin_phone?: string | null;
+  admin_title?: string | null;
+  business_type?: string | null;
+  gst_number?: string | null;
+  pan_number?: string | null;
+  cin_number?: string | null;
+  registered_address?: string | null;
+  industry?: string | null;
+  status: string;
+  created_at: string;
+  trial_days?: number | null;
+  trial_credits?: number | string | null;
+  pilot_seats?: number | null;
+  agreement_reference?: string | null;
+  agreement_effective_date?: string | null;
+  welcome_email_sent_at?: string | null;
+  plan_state?: string | null;
+  trial_ends_at?: string | null;
+  credit_balance?: number | string | null;
+  activation_pending?: boolean | null;
+  activated_at?: string | null;
+  pilot_agreement_accepted_at?: string | null;
+  /** Active members now — counted against plan_seats (paid) or pilot_seats (trial). */
+  seats_used?: number | null;
+  plan_seats?: number | null;
+}
+
+export interface OnboardClientRequest {
+  company_name: string;
+  admin_name: string;
+  admin_email: string;
+  admin_phone?: string;
+  admin_title?: string;
+  business_type?: string;
+  gst_number?: string;
+  pan_number?: string;
+  cin_number?: string;
+  registered_address?: string;
+  industry?: string;
+  /** Omit for no trial (and no pilot agreement). */
+  trial_days?: number;
+  trial_credits?: number;
+  pilot_seats?: number;
+  /** YYYY-MM-DD, IST calendar date. Defaults to today on the server. */
+  agreement_effective_date?: string;
+  agreement_reference?: string;
+}
+
+export type ClientStatusFilter = 'all' | 'active' | 'suspended' | 'pending';
+
+export interface ClientCounts {
+  all: number;
+  active: number;
+  suspended: number;
+  pending: number;
+  on_trial: number;
+}
+
+export interface ClientPage {
+  items: ClientRow[];
+  /** Rows matching the search + status filter. */
+  total: number;
+  page: number;
+  size: number;
+  pages: number;
+  /** Totals across all clients, unaffected by the search. */
+  counts: ClientCounts;
+}
+
+export interface ClientOption {
+  org_id: string;
+  company_name: string;
+}
+
+export interface ClientPageParams {
+  page: number;
+  size: number;
+  search?: string;
+  status?: ClientStatusFilter;
+}
+
 export const adminClientsApi = {
-  list: () => apiClient.get<any[]>('/api/admin/clients/onboarded'),
-  onboard: (data: any) => apiClient.post<any>('/api/admin/clients/onboard', data),
+  /** One page of clients, searched and filtered on the server. */
+  page: ({ page, size, search, status }: ClientPageParams) => {
+    const sp = new URLSearchParams({ page: String(page), size: String(size) });
+    if (search?.trim()) sp.set('search', search.trim());
+    if (status && status !== 'all') sp.set('status', status);
+    return apiClient.get<ClientPage>(`/api/admin/clients?${sp.toString()}`);
+  },
+  /** Org id + name for every client, A–Z — for dropdowns. */
+  options: () => apiClient.get<ClientOption[]>('/api/admin/clients/options'),
+  onboard: (data: OnboardClientRequest) => apiClient.post<ClientRow>('/api/admin/clients/onboard', data),
+  /** Give, extend, shorten or reopen a trial. `ends_on` is a bare YYYY-MM-DD (IST). */
+  updateTrial: (orgId: string, data: { ends_on: string; add_credits?: number; seats?: number }) =>
+    apiClient.put<ClientRow>(`/api/admin/clients/${orgId}/trial`, data),
+  resendWelcome: (orgId: string) =>
+    apiClient.post<ClientRow>(`/api/admin/clients/${orgId}/resend-welcome`),
    deactivate: (orgId: string) => 
     apiClient.patch<{ message: string }>(`/api/admin/organizations/${orgId}/deactivate`),
    activate: (orgId: string) => 
@@ -321,4 +422,71 @@ export const ivrApi = {
     apiClient.post<IvrMonitor>(`/api/admin/telephony/${orgId}/enable`, { enabled }),
   /** Release the org's TeleCMI app; its reps go back to native calling. */
   disconnect: (orgId: string) => apiClient.post<IvrMonitor>(`/api/admin/telephony/${orgId}/disconnect`),
+};
+
+// ─── Coupons ───────────────────────────────────────────────────────────────
+// Mirrors /api/admin/billing/coupons (app/routers/billing.py). Plan purchases
+// only, one payment; the discount comes off the price before GST and never
+// off the credits.
+
+export type CouponType = 'percent' | 'fixed';
+
+export interface Coupon {
+  id: string;
+  code: string;
+  description?: string | null;
+  discount_type: CouponType;
+  percent_off?: number | string | null;
+  amount_off_inr?: number | string | null;
+  max_discount_inr?: number | string | null;
+  min_order_inr?: number | string | null;
+  /** null = every plan */
+  plan_codes?: string[] | null;
+  /** null = public */
+  org_ids?: string[] | null;
+  max_redemptions?: number | null;
+  max_per_org?: number | null;
+  first_purchase_only: boolean;
+  /** Naive IST, e.g. 2026-12-01T00:00:00 */
+  valid_from?: string | null;
+  valid_until?: string | null;
+  is_active: boolean;
+  created_at?: string | null;
+  uses: number;
+  total_discount_inr: number | string;
+}
+
+export type CouponInput = Omit<Coupon, 'id' | 'uses' | 'total_discount_inr' | 'created_at'>;
+
+export interface CouponRedemption {
+  purchase_id: string;
+  org_id: string;
+  org_name?: string | null;
+  invoice_number?: string | null;
+  description?: string | null;
+  list_amount_inr?: number | string | null;
+  discount_inr: number | string;
+  amount_inr: number | string;
+  total_amount_inr: number | string;
+  paid_at: string;
+}
+
+export interface BillingPlanOption {
+  id: string;
+  plan_code: string;
+  plan_name: string;
+  price_inr: number | string;
+  duration_days: number;
+  min_seats: number;
+}
+
+export const couponsApi = {
+  list: () => apiClient.get<Coupon[]>('/api/admin/billing/coupons'),
+  create: (data: CouponInput) => apiClient.post<Coupon>('/api/admin/billing/coupons', data),
+  update: (id: string, data: Partial<CouponInput>) =>
+    apiClient.patch<Coupon>(`/api/admin/billing/coupons/${id}`, data),
+  redemptions: (id: string) =>
+    apiClient.get<CouponRedemption[]>(`/api/admin/billing/coupons/${id}/redemptions`),
+  /** The plans a coupon can be limited to. */
+  plans: () => apiClient.get<BillingPlanOption[]>('/api/billing/plans'),
 };

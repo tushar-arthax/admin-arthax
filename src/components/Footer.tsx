@@ -90,7 +90,7 @@ const Footer = () => (
             <li className="flex items-start gap-3">
               <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-primary/60" />
               <span className="text-sm text-muted-foreground leading-relaxed">
-                40, Central Excise Layout, CHBS Layout, Stage 2, Vijayanagar, Bengaluru, Karnataka 560040
+                No 208, 5th Cross, GKW Layout, Bengaluru, Karnataka 560072
               </span>
             </li>
             <li className="flex items-center gap-3">

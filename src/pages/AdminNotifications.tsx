@@ -46,11 +46,11 @@ export default function AdminNotifications() {
     queryFn: () => adminNotificationApi.getHistory(50),
   });
 
-  // Same cache the onboarding screen fills, so the dropdown is usually
-  // populated before this page has finished painting.
+  // Names only, A–Z — the dropdown never needs the full client rows.
   const { data: clients = [] } = useQuery({
-    queryKey: qk.clients,
-    queryFn: adminClientsApi.list,
+    queryKey: qk.clientOptions,
+    queryFn: adminClientsApi.options,
+    staleTime: 5 * 60_000,
   });
 
   const sendMutation = useMutation({
@@ -94,7 +94,7 @@ export default function AdminNotifications() {
   }, [history, scopeFilter]);
 
   const orgName = (orgId?: string | null) =>
-    (clients as any[]).find((c) => c.org_id === orgId)?.company_name;
+    clients.find((c) => c.org_id === orgId)?.company_name;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -135,7 +135,7 @@ export default function AdminNotifications() {
                     onChange={(e) => setForm((f) => ({ ...f, org_id: e.target.value }))}
                   >
                     <option value="">All organisations (global)</option>
-                    {(clients as any[]).map((c) => (
+                    {clients.map((c) => (
                       <option key={c.org_id} value={c.org_id}>{c.company_name}</option>
                     ))}
                   </select>

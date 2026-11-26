@@ -11,7 +11,11 @@ export const qk = {
   tickets: ['adminTickets'] as const,
   ticketMessages: (ticketId: string) => ['adminTicketMessages', ticketId] as const,
 
-  clients: ['onboardedClients'] as const,
+  /** Prefix for everything client-list shaped: invalidate this to refresh all. */
+  clients: ['clients'] as const,
+  clientPage: (params: { page: number; size: number; search: string; status: string }) =>
+    ['clients', 'page', params] as const,
+  clientOptions: ['clients', 'options'] as const,
 
   notificationHistory: ['adminNotificationHistory'] as const,
 
@@ -21,4 +25,8 @@ export const qk = {
   supportEvents: (grantId: string | undefined) => ['supportEvents', grantId] as const,
 
   ivrMonitor: ['ivrMonitor'] as const,
+
+  coupons: ['coupons'] as const,
+  couponRedemptions: (id: string | undefined) => ['coupons', 'redemptions', id] as const,
+  billingPlans: ['billingPlans'] as const,
 } as const;
