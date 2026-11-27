@@ -154,9 +154,24 @@ export const apiClient = {
 
 // ─── Endpoints ───────────────────────────────────────────────────────────
 
+/** Step 1 passed: a code was emailed. No session yet. */
+export interface AdminLoginChallenge {
+  two_factor_required: true;
+  challenge_token: string;
+  expires_in: number;
+  resend_after: number;
+  email_hint: string;
+}
+
 export const authApi = {
+  /** Step 1: password. Never returns a session — emails an 8-digit code. */
   adminLogin: (email: string, password: string) =>
-    apiClient.post<LoginResponse>('/api/admin/auth/login', { email, password }),
+    apiClient.post<AdminLoginChallenge>('/api/admin/auth/login', { email, password }),
+  /** Step 2: the emailed code. Returns the session. */
+  verify2fa: (challengeToken: string, code: string) =>
+    apiClient.post<LoginResponse>('/api/admin/auth/verify-2fa', { challenge_token: challengeToken, code }),
+  resend2fa: (challengeToken: string) =>
+    apiClient.post<{ message: string; resend_after: number }>('/api/admin/auth/resend-2fa', { challenge_token: challengeToken }),
   logout: () => apiClient.post<{message: string}>('/api/admin/auth/logout'),
 };
 

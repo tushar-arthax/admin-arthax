@@ -890,10 +890,10 @@ function TrialDialog({
             <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-surface-2/30 p-3 text-[11px] text-muted-foreground">
               <FileSignature className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               {client.activation_pending
-                ? 'Not activated yet, so their pilot agreement will show these new terms when they review it.'
-                : client.pilot_agreement_accepted_at
-                  ? 'They already accepted their pilot agreement. That stays as signed; this change is an extension outside it (Clause 3.2).'
-                  : 'They activated without a trial, so no pilot agreement was accepted. The server will refuse a new trial.'}
+                ? 'Not activated yet, so their pilot agreement will show these terms when they review it.'
+                : client.plan_state === 'trial' && client.pilot_agreement_accepted_at
+                  ? 'Their trial is running and its pilot agreement is accepted. That stays as signed; this change is an extension outside it (Clause 3.2).'
+                  : "They've already activated. A new trial comes with a new Pilot Agreement, so their admin goes through onboarding again (email code, accept the documents, set a password). Their team keeps working, and an email tells them what to do."}
               {' '}Trial credits expire when the trial ends.
             </div>
 
